@@ -36,7 +36,9 @@ My Claude Code setup: a TokyoNight Storm theme and a status line.
 
 ## Phone / narrow terminals (Termux)
 
-The status line measures the terminal width each time it redraws. When everything doesn't fit on one line (for example a phone in portrait mode), it wraps onto extra lines instead of getting cut off, and below 50 columns the context bar gets shorter. Rotate back to landscape and it goes back to one line.
+The status line measures the terminal width each time it redraws. When everything doesn't fit on one line (for example a phone in portrait mode), it wraps onto extra lines instead of getting cut off, and below 50 columns the context bar gets shorter. Rotate back to landscape and it goes back to one line. `settings.json` sets `refreshInterval: 2`, so the status line redraws within a couple of seconds after you rotate, even when nothing else is happening.
+
+Under proot (Termux), the script reads the width from the terminal Claude Code itself runs in (`/proc/<pid>/fd`), because `/dev/tty` isn't available there.
 
 If the width is detected wrong, set it yourself in `settings.json`:
 

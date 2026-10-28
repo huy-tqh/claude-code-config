@@ -2,7 +2,8 @@
   "model": "haiku",
   "statusLine": {
     "type": "command",
-    "command": "bash ~/.claude/statusline-command.sh"
+    "command": "bash ~/.claude/statusline-command.sh",
+    "refreshInterval": 2
   },
   "effortLevel": "medium",
   "modelSettings": {

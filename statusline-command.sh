@@ -41,9 +41,18 @@ cols="${STATUSLINE_WIDTH:-}"
 [ -z "$cols" ] && cols=$( { stty size </dev/tty; } 2>/dev/null | awk '{print $2}')
 [ -z "$cols" ] && cols=$( { tput cols </dev/tty; } 2>/dev/null)
 if [ -z "$cols" ]; then
-  # no tty of our own: ask the terminal that Claude Code (our parent) runs in
-  ptty=$(ps -o tty= -p "$PPID" 2>/dev/null | tr -d ' ')
-  case "$ptty" in ''|'?') ;; *) cols=$( { stty -F "/dev/$ptty" size; } 2>/dev/null | awk '{print $2}') ;; esac
+  # No tty of our own (Claude Code runs us through a pipe). Walk up the
+  # parent processes and read the size of the terminal Claude Code is in.
+  # /proc/<pid>/fd/N works under proot (Termux), where /dev/tty doesn't.
+  pid=$PPID
+  for _ in 1 2 3 4 5; do
+    case "$pid" in ''|0|1) break ;; esac
+    for fd in 0 1 2; do
+      c=$( { stty -F "/proc/$pid/fd/$fd" size; } 2>/dev/null | awk '{print $2}')
+      case "$c" in ''|0|*[!0-9]*) ;; *) cols=$c; break 2 ;; esac
+    done
+    pid=$(awk '{print $4}' "/proc/$pid/stat" 2>/dev/null)
+  done
 fi
 [ -z "$cols" ] && cols="${COLUMNS:-80}"
 case "$cols" in ''|*[!0-9]*) cols=80 ;; esac
