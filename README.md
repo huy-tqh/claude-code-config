@@ -34,6 +34,16 @@ My Claude Code setup: a TokyoNight Storm theme and a status line.
 - `jq`, used by the status line script.
 - A Nerd Font in your terminal. The folder and branch icons (`U+F07B`, `U+E0A0`) won't render otherwise.
 
+## Phone / narrow terminals (Termux)
+
+The status line measures the terminal width each time it redraws. When everything doesn't fit on one line (for example a phone in portrait mode), it wraps onto extra lines instead of getting cut off, and below 50 columns the context bar gets shorter. Rotate back to landscape and it goes back to one line.
+
+If the width is detected wrong, set it yourself in `settings.json`:
+
+```json
+"statusLine": { "type": "command", "command": "STATUSLINE_WIDTH=45 bash ~/.claude/statusline-command.sh" }
+```
+
 ## Notes
 
 - Claude Code's built-in syntax highlighting for code blocks isn't controlled by the theme file, so code blocks keep their default colors.
