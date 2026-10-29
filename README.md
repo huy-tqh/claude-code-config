@@ -9,6 +9,7 @@ My Claude Code setup: a TokyoNight Storm theme and a status line.
 | `themes/tokyonight.json` | Custom Claude Code theme based on the dark theme, using Tokyo Night Storm colors. Diff colors come from a reference screenshot. |
 | `statusline-command.sh` | Status line script: model and effort, context tokens, folder, git branch, and 5h/7d rate-limit bars. |
 | `settings.json` | Claude Code settings that select the custom theme and the status line script. |
+| `claude-accounts.sh` | Adds one command per Claude Code account (`claude-work`, `claude-personal`, ...), optionally sharing conversations between them. |
 
 ## Install
 
@@ -45,6 +46,19 @@ If the width is detected wrong, set it yourself in `settings.json`:
 ```json
 "statusLine": { "type": "command", "command": "STATUSLINE_WIDTH=45 bash ~/.claude/statusline-command.sh" }
 ```
+
+## Multiple accounts
+
+```bash
+bash claude-accounts.sh add work
+bash claude-accounts.sh add personal
+```
+
+Each `add` creates a command (`claude-work`, `claude-personal`) in `~/.local/bin`. Run it and `/login`. Add as many accounts as you like. `bash claude-accounts.sh` lists them, `rm NAME` removes one.
+
+The first `add` asks once whether to share conversations and settings between accounts (default no). If you say yes, you can pick up a conversation on another account when one runs out of quota: in the same folder, run `claude-personal -c`. Change your mind with `bash claude-accounts.sh share on|off`.
+
+Sharing links each account's `projects/` to `~/.claude-shared/projects`, and links `settings.json`, `CLAUDE.md`, `commands`, `skills`, `agents`, `plugins`, `themes` and `statusline-command.sh` from `~/.claude`. `.claude.json` (the login) is never shared. Caveats: resuming sends the whole conversation to the other account; don't run the same session in two terminals; resume from the same folder; symlinks need Linux, macOS, WSL or Termux.
 
 ## Notes
 
