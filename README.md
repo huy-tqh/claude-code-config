@@ -49,14 +49,24 @@ If the width is detected wrong, set it yourself in `settings.json`:
 
 ## Multiple accounts
 
-Use several Claude Code accounts (for example work and personal) on one machine, each with its own login. `claude-accounts.sh` is plain `sh`: run it with `sh claude-accounts.sh ...` or `./claude-accounts.sh ...`. Run it with no arguments to see every command.
+Use several Claude Code accounts (for example work and personal) on one machine, each with its own login. `claude-accounts.sh` is plain `sh`: run it with `sh claude-accounts.sh ...` or `./claude-accounts.sh ...`.
 
-The script never guesses. A wrong or missing argument stops with an error and the correct command template, for example:
+Five commands, all take at most one name:
+
+| Command | What it does |
+|---------|--------------|
+| `add NAME` | Create the command `claude-NAME`. |
+| `edit NAME` | Change what `NAME` shares with other accounts. |
+| `rm NAME` | Remove `claude-NAME`. |
+| `list` | Accounts, login state, and what each one shares. |
+| `completion bash\|zsh` | Install tab completion. |
+
+Run it with no arguments to see them. A wrong or missing argument stops with an error and the correct template; the script never guesses a value. For example:
 
 ```
-$ ./claude-accounts.sh rm work
-error: expected NAME and keep|delete, got 1 argument(s)
-usage: ./claude-accounts.sh rm NAME keep|delete
+$ ./claude-accounts.sh add
+error: expected exactly one NAME, got 0
+usage: ./claude-accounts.sh add NAME
 ```
 
 ### 1. Add accounts
@@ -66,9 +76,16 @@ usage: ./claude-accounts.sh rm NAME keep|delete
 ./claude-accounts.sh add personal
 ```
 
-Each `add` creates a command named `claude-<name>` in `~/.local/bin` and a config dir `~/.claude-<name>`. Add as many as you like. If `~/.local/bin` isn't in your `PATH`, the script says so. `shared` and `all` can't be used as names.
+Each `add` creates a command `claude-<name>` in `~/.local/bin` and a config dir `~/.claude-<name>`. Add as many as you like. If `~/.local/bin` isn't in your `PATH`, the script says so. The name can't be `shared`.
 
-The first `add` asks two yes/no questions (see "What can be shared"). You have to answer `y` or `n`; Enter alone isn't accepted. Your answers apply to accounts you add later. Without a terminal it won't guess; it tells you to run `share sessions on|off all` and `share config on|off all` first.
+`add` asks two questions about that account. Each needs an explicit `y` or `n`; Enter alone isn't accepted. These commands need a terminal because of the questions.
+
+| Question | `y` means | Why you might want it |
+|----------|-----------|-----------------------|
+| Share conversations? | The account's `projects/` points to `~/.claude-shared/projects`, so it sees the same conversation history as every other account that answered `y`. | Continue a conversation on another account with `-c`. |
+| Share settings? | `settings.json`, `CLAUDE.md`, `commands`, `skills`, `agents`, `plugins`, `themes` and `statusline-command.sh` are linked from `~/.claude`. | Same theme, skills and plugins everywhere. Answer `n` for an account that needs different ones. |
+
+`.claude.json` holds the login and is never shared. To change an answer later, run `edit NAME`; it asks the same two questions. `n` gives the account a real copy of what it shared, so nothing is lost. `y` on settings keeps any file the account already has of its own and only links what is missing. Old directories that get replaced are kept as `<name>.bak-<timestamp>`.
 
 ### 2. Log in, once per account
 
@@ -86,57 +103,27 @@ cd ~/my-project
 claude-work              # work on this project with the work account
 ```
 
-When the work account runs out of quota and you shared conversations, continue the same conversation on another account. Run it in the same folder:
+When the work account runs out of quota and both accounts share conversations, continue the same conversation on the other account. Run it in the same folder:
 
 ```bash
 claude-personal -c            # continue the latest conversation in this folder
 claude-personal --resume      # or pick one from a list
 ```
 
-### All commands
-
-| Command | What it does |
-|---------|--------------|
-| `add NAME` | Create `claude-NAME`. |
-| `rm NAME keep\|delete` | Remove `claude-NAME`. `keep` leaves `~/.claude-NAME` (login, settings) in place, `delete` removes it too. Shared conversations are never deleted. |
-| `share sessions\|config on\|off all\|NAME [NAME ...]` | Turn sharing on or off. `all` changes every account and the default for new ones; names change only those accounts. |
-| `list` | Accounts, login state, and what each one shares. |
-| `completion install\|uninstall\|print bash\|zsh` | Tab completion, see below. |
-
-### What can be shared
-
-Two independent switches. Choose per account or for all.
-
-| Switch | What it shares | Why you might want it |
-|--------|----------------|-----------------------|
-| `sessions` | Conversation history. Every account's `projects/` points to `~/.claude-shared/projects`. | Continue a conversation on another account with `-c`. |
-| `config` | `settings.json`, `CLAUDE.md`, `commands`, `skills`, `agents`, `plugins`, `themes` and `statusline-command.sh`, linked from `~/.claude`. | Same theme, skills and plugins everywhere. Turn it off for an account that needs different ones. |
-
-`.claude.json` holds the login and is never shared.
-
-```bash
-./claude-accounts.sh share sessions on all           # every account, and new ones
-./claude-accounts.sh share config off work           # work gets its own settings back
-./claude-accounts.sh share config on personal work   # two accounts
-```
-
-Turning a switch off gives the account a real copy of what it shared, so nothing is lost. Turning `config` on keeps any file an account already has of its own and only links what is missing. Old directories that get replaced are kept as `<name>.bak-<timestamp>`.
-
 ### Tab completion
 
 ```bash
-./claude-accounts.sh completion install bash    # or: zsh
+./claude-accounts.sh completion bash    # or: zsh
 ```
 
-Then open a new shell and press Tab after `./claude-accounts.sh` for commands, options and account names. The completion uses only shell built-ins, with no subprocess and no call to the script, so it is instant, and bash loads it only the first time you press Tab.
+Open a new shell, then press Tab after `./claude-accounts.sh` for commands and account names. The completion uses only shell built-ins, with no subprocess and no call to the script, so it is instant, and bash loads it only the first time you press Tab. To remove it, delete the file the command prints.
 
-- bash needs the `bash-completion` package, which is already installed on most Linux distributions (`brew install bash-completion@2` on macOS). If you don't have it, `completion print bash` prints the script so you can `source` it yourself.
-- zsh needs the install directory in `fpath` before `compinit` in `~/.zshrc`; the installer prints the line to add.
-
-`completion uninstall bash|zsh` removes it.
+- bash needs the `bash-completion` package, which is already installed on most Linux distributions (`brew install bash-completion@2` on macOS). Without it, add `. <file>` to `~/.bashrc`; the command prints the line.
+- zsh needs the install directory in `fpath` before `compinit` in `~/.zshrc`; the command prints the line to add.
 
 ### Things to know
 
+- `rm NAME` asks whether to also delete `~/.claude-NAME` (login and settings). Shared conversations are never deleted.
 - Continuing a conversation on another account sends the whole conversation to that account. Don't share conversations between a work account and a personal one if the code or data is restricted.
 - Conversations are stored per folder, so continue from the same folder.
 - Don't run the same conversation in two terminals at once.

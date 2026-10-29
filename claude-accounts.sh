@@ -10,19 +10,18 @@
 BIN="${CLAUDE_ACCOUNTS_BIN:-$HOME/.local/bin}"
 SHARED="${CLAUDE_SHARED_DIR:-$HOME/.claude-shared}"
 MARK="# claude-accounts"
-BASH_COMP="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions/claude-accounts.sh"
-ZSH_COMP="${XDG_DATA_HOME:-$HOME/.local/share}/zsh/site-functions/_claude-accounts.sh"
-# Settings that "share config" links from ~/.claude. .claude.json (the login) never is.
+COMP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
+# Settings that "share settings" links from ~/.claude. .claude.json (the login) never is.
 CONFIG_ITEMS="settings.json CLAUDE.md commands skills agents plugins themes statusline-command.sh"
 
 # Command templates, shown whenever a command is used wrongly.
 tmpl() {
   case "$1" in
     add)        echo "$0 add NAME" ;;
-    rm)         echo "$0 rm NAME keep|delete" ;;
-    share)      echo "$0 share sessions|config on|off all|NAME [NAME ...]" ;;
+    edit)       echo "$0 edit NAME" ;;
+    rm)         echo "$0 rm NAME" ;;
     list)       echo "$0 list" ;;
-    completion) echo "$0 completion install|uninstall|print bash|zsh" ;;
+    completion) echo "$0 completion bash|zsh" ;;
   esac
 }
 
@@ -30,16 +29,15 @@ usage() {
   cat <<EOF
 Commands:
   $(tmpl add)
-      create the command claude-NAME (then run it and /login)
+      create the command claude-NAME
+  $(tmpl edit)
+      change what NAME shares with other accounts
   $(tmpl rm)
-      remove claude-NAME; keep or delete its config dir ~/.claude-NAME
-  $(tmpl share)
-      sessions = conversation history, config = theme/skills/plugins/settings;
-      "all" or the accounts to change
+      remove claude-NAME
   $(tmpl list)
       accounts, login state, what each shares
   $(tmpl completion)
-      tab completion
+      install tab completion
 EOF
 }
 
@@ -57,7 +55,7 @@ adir() { echo "$HOME/.claude-$1"; }
 check_name() { # check_name COMMAND NAME
   case "$2" in
     ""|[!a-z0-9]*|*[!a-z0-9_-]*) fail "$1" "name must be lowercase letters, digits, - or _ (got '$2')" ;;
-    shared|all) fail "$1" "'$2' is reserved" ;;
+    shared) fail "$1" "'shared' is reserved" ;;
   esac
 }
 
@@ -71,20 +69,17 @@ names() {
 
 has_account() { names | grep -qx "$1"; }
 
-# Whether new accounts share each kind: "on" or "off", saved in $SHARED/<kind>. Empty = not chosen yet.
-default_of() { cat "$SHARED/$1" 2>/dev/null; }
-set_default() { mkdir -p "$SHARED"; echo "$2" > "$SHARED/$1"; }
-
-# yn QUESTION: 0 for y, 1 for n, 2 when there is no terminal to ask.
+# yn QUESTION: 0 for y, 1 for n. There is no default: only y or n is accepted.
 yn() {
-  [ -t 0 ] || return 2
-  while :; do
-    printf '%s [y/n] ' "$1"
-    read -r ans || return 2
+  printf '%s [y/n] ' "$1"
+  while read -r ans; do
     case "$ans" in y|yes) return 0 ;; n|no) return 1 ;; esac
-    echo "Please answer y or n."
+    printf 'Please answer y or n: '
   done
+  echo; die "no answer given"
 }
+
+need_terminal() { [ -t 0 ] || fail "$1" "this command asks questions and needs a terminal"; }
 
 # link TARGET LINK: make LINK a symlink to TARGET, keeping what LINK held.
 link() {
@@ -139,79 +134,51 @@ config_linked() {
   return 1
 }
 
-# Ask once per kind (conversations, settings); the answer applies to every later account.
-choose_default() { # choose_default KIND TITLE DETAIL
-  [ -n "$(default_of "$1")" ] && return 0
-  echo "$2"; echo "$3"
-  yn "Share?"
-  case $? in
-    0) set_default "$1" on ;;
-    1) set_default "$1" off ;;
-    *) echo "error: not set whether new accounts share $1, and there is no terminal to ask." >&2
-       echo "Choose first: $0 share $1 on|off all" >&2
-       exit 2 ;;
-  esac
+# Ask both sharing questions for the account in $1 and apply the answers.
+ask_sharing() {
+  if yn "Share conversations with other accounts? (continue a chat on another account; the chat is then sent to it)"
+  then sessions_on "$1"; else sessions_off "$1"; fi
+  if yn "Share settings from ~/.claude? (theme, skills, plugins, CLAUDE.md; n = this account keeps its own)"
+  then config_on "$1"; else config_off "$1"; fi
 }
 
 cmd_add() {
   [ $# -eq 1 ] || fail add "expected exactly one NAME, got $#"
-  name="$1"; check_name add "$name"
+  name="$1"; check_name add "$name"; need_terminal add
   cmd="$BIN/claude-$name"; dir="$(adir "$name")"
   if [ -e "$cmd" ] && [ "$(sed -n 2p "$cmd")" != "$MARK" ]; then
     die "$cmd already exists and was not created by this script"
   fi
-
-  # Decide sharing before creating anything, so a refusal leaves nothing behind.
-  choose_default sessions "Share conversations between accounts?" \
-"  Lets you continue a conversation on another account (claude-$name -c).
-  The whole conversation is then sent to that account."
-  choose_default config "Share settings from ~/.claude with accounts?" \
-"  Theme, skills, plugins, commands, CLAUDE.md, settings.json.
-  Answer n if accounts should have different ones."
+  [ -e "$cmd" ] && die "claude-$name already exists (change it with: $(tmpl edit | sed "s/NAME/$name/"))"
 
   mkdir -p "$BIN" "$dir"
   printf '#!/bin/sh\n%s\nCLAUDE_CONFIG_DIR="%s" exec claude "$@"\n' "$MARK" "$dir" > "$cmd"
   chmod +x "$cmd"
-  [ "$(default_of sessions)" = on ] && sessions_on "$dir"
-  [ "$(default_of config)" = on ] && config_on "$dir"
+  ask_sharing "$dir"
 
   echo "Added: claude-$name"
   case ":$PATH:" in *":$BIN:"*) ;; *) echo "Note: $BIN is not in your PATH; add it to use the command." ;; esac
   echo "Next: cd into your project, run claude-$name, then /login."
 }
 
-cmd_rm() {
-  [ $# -eq 2 ] || fail rm "expected NAME and keep|delete, got $# argument(s)"
-  name="$1"; mode="$2"; check_name rm "$name"
-  case "$mode" in keep|delete) ;; *) fail rm "second argument must be keep or delete (got '$mode')" ;; esac
-  has_account "$name" || fail rm "no account '$name' (see: $0 list)"
-  rm -f "$BIN/claude-$name"
-  echo "Removed: claude-$name"
-  if [ "$mode" = delete ]; then
-    rm -rf "$(adir "$name")"
-    echo "Deleted: $(adir "$name") (shared conversations stay in $SHARED)"
-  else
-    echo "Kept: $(adir "$name")"
-  fi
+cmd_edit() {
+  [ $# -eq 1 ] || fail edit "expected exactly one NAME, got $#"
+  check_name edit "$1"; need_terminal edit
+  has_account "$1" || fail edit "no account '$1' (see: $(tmpl list))"
+  ask_sharing "$(adir "$1")"
+  echo "Updated: claude-$1"
 }
 
-cmd_share() {
-  [ $# -ge 3 ] || fail share "expected a kind, on|off and all|NAME, got $# argument(s)"
-  kind="$1"; mode="$2"; shift 2
-  case "$kind" in sessions|config) ;; *) fail share "first argument must be sessions or config (got '$kind')" ;; esac
-  case "$mode" in on|off) ;; *) fail share "second argument must be on or off (got '$mode')" ;; esac
-  if [ "$1" = all ]; then
-    [ $# -eq 1 ] || fail share "'all' cannot be combined with account names"
-    targets="$(names)"
-    set_default "$kind" "$mode"
-    msg="all accounts, and new ones"
-  else
-    for n in "$@"; do has_account "$n" || fail share "no account '$n' (see: $0 list)"; done
-    targets="$*"
-    msg="$*"
-  fi
-  for n in $targets; do "${kind}_$mode" "$(adir "$n")"; done
-  echo "Sharing $kind: $mode for $msg"
+cmd_rm() {
+  [ $# -eq 1 ] || fail rm "expected exactly one NAME, got $#"
+  check_name rm "$1"; need_terminal rm
+  has_account "$1" || fail rm "no account '$1' (see: $(tmpl list))"
+  if yn "Also delete $(adir "$1") (its login and settings)? Shared conversations stay."
+  then del=1; else del=0; fi
+  rm -f "$BIN/claude-$1"
+  echo "Removed: claude-$1"
+  if [ $del = 1 ]; then rm -rf "$(adir "$1")"; echo "Deleted: $(adir "$1")"
+  else echo "Kept: $(adir "$1")"; fi
 }
 
 cmd_list() {
@@ -226,8 +193,6 @@ cmd_list() {
     printf 'claude-%-12s %-14s %-22s %s\n' "$n" "$login" "$s" "$c"
   done
   [ $found = 1 ] || echo "No accounts yet. Add one: $(tmpl add)"
-  printf 'New accounts share: conversations=%s settings=%s\n' \
-    "$(default_of sessions | sed 's/^$/not chosen/')" "$(default_of config | sed 's/^$/not chosen/')"
 }
 
 # Completion scripts use shell builtins only (no subprocess), so Tab stays instant.
@@ -235,33 +200,21 @@ cmd_list() {
 print_bash_comp() {
   cat <<'EOF'
 _claude_accounts() {
-  local cur=${COMP_WORDS[COMP_CWORD]} w="" a
-  _ca_names=""
-  case $COMP_CWORD in
-    1) w="add rm share list completion" ;;
-    2) case ${COMP_WORDS[1]} in
-         share) w="sessions config" ;;
-         completion) w="install uninstall print" ;;
-         rm) _claude_accounts_names; w=$_ca_names ;;
-       esac ;;
-    3) case ${COMP_WORDS[1]} in
-         share) w="on off" ;;
-         rm) w="keep delete" ;;
-         completion) w="bash zsh" ;;
-       esac ;;
-    4) if [[ ${COMP_WORDS[1]} == share ]]; then _claude_accounts_names; w="all$_ca_names"; fi ;;
-    *) if [[ ${COMP_WORDS[1]} == share && ${COMP_WORDS[4]} != all ]]; then _claude_accounts_names; w=$_ca_names; fi ;;
-  esac
+  local cur=${COMP_WORDS[COMP_CWORD]} w="" a d n
+  if [[ $COMP_CWORD == 1 ]]; then
+    w="add edit rm list completion"
+  elif [[ $COMP_CWORD == 2 ]]; then
+    case ${COMP_WORDS[1]} in
+      completion) w="bash zsh" ;;
+      edit|rm)
+        for d in "$HOME"/.claude-*/; do
+          n=${d%/}; n=${n##*/.claude-}
+          [[ $n != shared && $n != "*" ]] && w="$w $n"
+        done ;;
+    esac
+  fi
   COMPREPLY=()
   for a in $w; do [[ $a == "$cur"* ]] && COMPREPLY+=("$a"); done
-}
-_claude_accounts_names() {
-  local d n
-  _ca_names=""
-  for d in "$HOME"/.claude-*/; do
-    n=${d%/}; n=${n##*/.claude-}
-    [[ $n != shared && $n != "*" ]] && _ca_names="$_ca_names $n"
-  done
 }
 complete -F _claude_accounts claude-accounts.sh
 EOF
@@ -273,24 +226,17 @@ print_zsh_comp() {
 _claude_accounts() {
   local -a acc
   local d n
-  for d in ~/.claude-*(N/); do
-    n=${d:t}; n=${n#.claude-}
-    [[ $n == shared ]] || acc+=($n)
-  done
   case $CURRENT in
-    2) compadd add rm share list completion ;;
+    2) compadd add edit rm list completion ;;
     3) case $words[2] in
-         share) compadd sessions config ;;
-         completion) compadd install uninstall print ;;
-         rm) compadd -a acc ;;
-       esac ;;
-    4) case $words[2] in
-         share) compadd on off ;;
-         rm) compadd keep delete ;;
          completion) compadd bash zsh ;;
+         edit|rm)
+           for d in ~/.claude-*(N/); do
+             n=${d:t}; n=${n#.claude-}
+             [[ $n == shared ]] || acc+=($n)
+           done
+           compadd -a acc ;;
        esac ;;
-    5) [[ $words[2] == share ]] && compadd all $acc ;;
-    *) [[ $words[2] == share && $words[5] != all ]] && compadd -a acc ;;
   esac
 }
 _claude_accounts "$@"
@@ -298,35 +244,28 @@ EOF
 }
 
 cmd_completion() {
-  [ $# -eq 2 ] || fail completion "expected an action and a shell, got $# argument(s)"
-  action="$1"; shell="$2"
-  case "$shell" in
-    bash) file="$BASH_COMP" ;;
-    zsh) file="$ZSH_COMP" ;;
-    *) fail completion "second argument must be bash or zsh (got '$shell')" ;;
+  [ $# -eq 1 ] || fail completion "expected bash or zsh, got $# argument(s)"
+  case "$1" in
+    bash) file="$COMP_DIR/bash-completion/completions/claude-accounts.sh" ;;
+    zsh) file="$COMP_DIR/zsh/site-functions/_claude-accounts.sh" ;;
+    *) fail completion "expected bash or zsh (got '$1')" ;;
   esac
-  case "$action" in
-    print) "print_${shell}_comp" ;;
-    install)
-      mkdir -p "$(dirname "$file")"
-      "print_${shell}_comp" > "$file"
-      echo "Installed: $file"
-      if [ "$shell" = bash ]; then
-        echo "Loads on demand if the bash-completion package is installed. Open a new shell, then try: $0 <Tab>"
-      else
-        echo "zsh needs this before compinit in ~/.zshrc:  fpath=($(dirname "$file") \$fpath)"
-      fi ;;
-    uninstall) rm -f "$file"; echo "Removed: $file" ;;
-    *) fail completion "first argument must be install, uninstall or print (got '$action')" ;;
-  esac
+  mkdir -p "$(dirname "$file")"
+  "print_${1}_comp" > "$file"
+  echo "Installed: $file (delete that file to remove it)"
+  if [ "$1" = bash ]; then
+    echo "Open a new shell. Needs the bash-completion package; without it, add to ~/.bashrc:  . $file"
+  else
+    echo "Add to ~/.zshrc before compinit:  fpath=($(dirname "$file") \$fpath)"
+  fi
 }
 
 [ $# -ge 1 ] || { usage; exit 2; }
 cmd="$1"; shift
 case "$cmd" in
   add) cmd_add "$@" ;;
+  edit) cmd_edit "$@" ;;
   rm) cmd_rm "$@" ;;
-  share) cmd_share "$@" ;;
   list) cmd_list "$@" ;;
   completion) cmd_completion "$@" ;;
   -h|--help|help) usage ;;
