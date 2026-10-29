@@ -27,17 +27,14 @@ tmpl() {
 
 usage() {
   cat <<EOF
+Usage: $0 COMMAND
+
 Commands:
-  $(tmpl add)
-      create the command claude-NAME
-  $(tmpl config)
-      share conversations or settings with other accounts, or rename NAME
-  $(tmpl rm)
-      remove claude-NAME
-  $(tmpl list)
-      accounts, login state, what each shares
-  $(tmpl completion)
-      install tab completion
+  add NAME           create the command claude-NAME
+  config NAME        share conversations or settings, or rename
+  rm NAME            remove claude-NAME
+  list               show all accounts
+  completion SHELL   install tab completion (bash or zsh)
 EOF
 }
 
@@ -134,13 +131,14 @@ config_linked() {
   return 1
 }
 
-# status_line NAME: one line with login state and what the account shares.
-status_line() {
-  dir="$(adir "$1")"
-  login="not logged in"; [ -f "$dir/.claude.json" ] && login="logged in"
-  sc="own conversations"; sessions_linked "$dir" && sc="shared conversations"
-  st="own settings"; config_linked "$dir" && st="shared settings"
-  printf 'claude-%-12s %-14s %-22s %s\n' "$1" "$login" "$sc" "$st"
+# Fields of an account's state, for status_block and cmd_list.
+login_of() { if [ -f "$(adir "$1")/.claude.json" ]; then echo "logged in"; else echo "not logged in"; fi; }
+sc_of() { if sessions_linked "$(adir "$1")"; then echo shared; else echo own; fi; }
+st_of() { if config_linked "$(adir "$1")"; then echo shared; else echo own; fi; }
+
+status_block() {
+  printf '  %-14s %s\n  %-14s %s\n  %-14s %s\n' \
+    login "$(login_of "$1")" conversations "$(sc_of "$1")" settings "$(st_of "$1")"
 }
 
 # Ask for a new name until it is valid and free. Sets $newname.
@@ -177,11 +175,14 @@ cmd_add() {
   printf '#!/bin/sh\n%s\nCLAUDE_CONFIG_DIR="%s" exec claude "$@"\n' "$MARK" "$dir" > "$cmd"
   chmod +x "$cmd"
 
-  echo "Added: claude-$name"
-  status_line "$name"
-  case ":$PATH:" in *":$BIN:"*) ;; *) echo "Note: $BIN is not in your PATH; add it to use the command." ;; esac
-  echo "Next: cd into your project, run claude-$name, then /login."
-  echo "To share conversations or settings, or rename: $(tmpl config | sed "s/NAME/$name/")"
+  echo "Added claude-$name"
+  status_block "$name"
+  case ":$PATH:" in *":$BIN:"*) ;; *) echo; echo "Note: $BIN is not in your PATH; add it to use the command." ;; esac
+  echo
+  echo "Next:"
+  echo "  1. cd into your project and run: claude-$name"
+  echo "  2. type /login"
+  echo "To share conversations or settings, or rename it: $(tmpl config | sed "s/NAME/$name/")"
 }
 
 cmd_config() {
@@ -189,20 +190,26 @@ cmd_config() {
   check_name config "$1"; need_terminal config
   has_account "$1" || fail config "no account '$1' (see: $(tmpl list))"
   dir="$(adir "$1")"
-  echo "Now: $(status_line "$1")"
-  sessions_linked "$dir" && now="now: shared" || now="now: own"
-  if yn "Share conversations with other accounts? ($now; lets you continue a chat on another account, which then receives it)"
-  then sessions_on "$dir"; else sessions_off "$dir"; fi
-  config_linked "$dir" && now="now: shared" || now="now: own"
-  if yn "Share settings from ~/.claude? ($now; theme, skills, plugins, CLAUDE.md; n = this account keeps its own)"
-  then config_on "$dir"; else config_off "$dir"; fi
+  echo "claude-$1 now:"; status_block "$1"
+  echo
+  echo "Conversations (now: $(sc_of "$1"))"
+  echo "  Share them so you can continue a chat on another account."
+  echo "  That account then receives the whole chat."
+  if yn "Share conversations?"; then sessions_on "$dir"; else sessions_off "$dir"; fi
+  echo
+  echo "Settings (now: $(st_of "$1"))"
+  echo "  Share ~/.claude settings: theme, skills, plugins, CLAUDE.md."
+  echo "  n = this account keeps its own."
+  if yn "Share settings?"; then config_on "$dir"; else config_off "$dir"; fi
+  echo
   if yn "Rename claude-$1?"; then
     ask_new_name
     rename_account "$1" "$newname"
-    echo "Renamed: claude-$1 -> claude-$newname"
+    echo "Renamed claude-$1 to claude-$newname"
     set -- "$newname"
   fi
-  status_line "$1"
+  echo
+  echo "claude-$1 now:"; status_block "$1"
 }
 
 cmd_rm() {
@@ -219,9 +226,14 @@ cmd_rm() {
 
 cmd_list() {
   [ $# -eq 0 ] || fail list "takes no arguments, got $#"
-  found=0
-  for n in $(names); do found=1; status_line "$n"; done
-  [ $found = 1 ] || echo "No accounts yet. Add one: $(tmpl add)"
+  list="$(names)"
+  [ -n "$list" ] || { echo "No accounts yet. Add one: $(tmpl add)"; return; }
+  w=7
+  for n in $list; do [ ${#n} -gt $w ] && w=${#n}; done
+  printf "%-$((w + 7))s  %-14s  %-13s  %s\n" ACCOUNT LOGIN CONVERSATIONS SETTINGS
+  for n in $list; do
+    printf "%-$((w + 7))s  %-14s  %-13s  %s\n" "claude-$n" "$(login_of "$n")" "$(sc_of "$n")" "$(st_of "$n")"
+  done
 }
 
 # Completion scripts use shell builtins only (no subprocess), so Tab stays instant.
