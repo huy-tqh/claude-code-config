@@ -1,104 +1,114 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Use several Claude Code accounts side by side.
 #
-#   claude-accounts.sh add work      create the command "claude-work"
-#   claude-accounts.sh add personal  create the command "claude-personal"
-#   claude-accounts.sh rm work       remove it
-#   claude-accounts.sh               list accounts
-#   claude-accounts.sh share on|off  share sessions and settings between accounts
+#   ./claude-accounts.sh add work              create the command "claude-work"
+#   ./claude-accounts.sh add personal          create the command "claude-personal"
+#   ./claude-accounts.sh                       list accounts and what they share
+#   ./claude-accounts.sh rm work               remove an account
+#   ./claude-accounts.sh share sessions on     share conversations between accounts
+#   ./claude-accounts.sh share config off work stop sharing settings for "work" only
 #
 # Each account is a config dir (~/.claude-NAME) plus a small command in
 # ~/.local/bin that sets CLAUDE_CONFIG_DIR. Nothing to source, no shell rc edits.
-# Sharing is asked once, on the first "add", and is off unless you say yes.
-# When it is on, "claude-personal -c" continues the conversation of "claude-work".
+# Run it with sh or directly; it needs no bash.
 #
 # Env: CLAUDE_ACCOUNTS_BIN (default ~/.local/bin), CLAUDE_SHARED_DIR (default ~/.claude-shared)
 
-set -u
-
 BIN="${CLAUDE_ACCOUNTS_BIN:-$HOME/.local/bin}"
 SHARED="${CLAUDE_SHARED_DIR:-$HOME/.claude-shared}"
-FLAG="$SHARED/share"
 MARK="# claude-accounts"
-# Config shared from ~/.claude when sharing is on. .claude.json (the login) never is.
-CONFIG_ITEMS=(settings.json CLAUDE.md commands skills agents plugins themes statusline-command.sh)
+# Settings that "share config" links from ~/.claude. .claude.json (the login) never is.
+CONFIG_ITEMS="settings.json CLAUDE.md commands skills agents plugins themes statusline-command.sh"
 
 die() { echo "error: $*" >&2; exit 1; }
 adir() { echo "$HOME/.claude-$1"; }
-sharing() { [ "$(cat "$FLAG" 2>/dev/null)" = on ]; }
 
 check_name() {
-  [[ "$1" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || die "name must be lowercase letters, digits, - or _ (got '$1')"
+  case "$1" in
+    ""|[!a-z0-9]*|*[!a-z0-9_-]*) die "name must be lowercase letters, digits, - or _ (got '$1')" ;;
+  esac
 }
 
 # Names of accounts, from the commands we created.
 names() {
-  local f
   for f in "$BIN"/claude-*; do
-    [ -f "$f" ] && sed -n 2p "$f" | grep -qx "$MARK" && basename "$f" | sed 's/^claude-//'
+    [ -f "$f" ] || continue
+    [ "$(sed -n 2p "$f")" = "$MARK" ] && basename "$f" | sed 's/^claude-//'
   done
+}
+
+has_account() { names | grep -qx "$1"; }
+
+# Default for new accounts: "on" or "off", saved in $SHARED/<kind>.
+default_of() { cat "$SHARED/$1" 2>/dev/null; }
+set_default() { mkdir -p "$SHARED"; echo "$2" > "$SHARED/$1"; }
+
+ask() {
+  [ -t 0 ] || return 1
+  printf '%s [y/N] ' "$1"
+  read -r ans
+  case "$ans" in y|Y|yes|Yes) return 0 ;; esac
+  return 1
 }
 
 # link TARGET LINK: make LINK a symlink to TARGET, keeping what LINK held.
 link() {
-  local target="$1" link="$2" bak=""
-  [ "$(readlink "$link" 2>/dev/null)" = "$target" ] && return 0
-  if [ -e "$link" ] || [ -L "$link" ]; then
-    if [ -d "$link" ] && [ ! -L "$link" ]; then
-      mkdir -p "$target"; cp -an "$link"/. "$target"/ 2>/dev/null
-    elif [ ! -e "$target" ]; then
-      cp -aL "$link" "$target"
+  target="$1"; lnk="$2"; bak=""
+  [ "$(readlink "$lnk" 2>/dev/null)" = "$target" ] && return 0
+  if [ -e "$lnk" ] || [ -L "$lnk" ]; then
+    if [ -d "$lnk" ] && [ ! -L "$lnk" ]; then
+      mkdir -p "$target"; cp -an "$lnk"/. "$target"/ 2>/dev/null
     fi
-    bak="$link.bak-$(date +%Y%m%d%H%M%S)"
-    mv "$link" "$bak"
+    bak="$lnk.bak-$(date +%Y%m%d%H%M%S)"
+    mv "$lnk" "$bak"
   fi
-  if ! ln -s "$target" "$link" 2>/dev/null || [ ! -L "$link" ]; then
-    rm -rf "$link"; [ -n "$bak" ] && mv "$bak" "$link"
-    die "cannot create symlink $link (Windows: use WSL, or enable Developer Mode and set MSYS=winsymlinks:nativestrict)"
+  if ! ln -s "$target" "$lnk" 2>/dev/null || [ ! -L "$lnk" ]; then
+    rm -rf "$lnk"; [ -n "$bak" ] && mv "$bak" "$lnk"
+    die "cannot create symlink $lnk (Windows: use WSL, or enable Developer Mode and set MSYS=winsymlinks:nativestrict)"
   fi
 }
 
-# unlink LINK: replace a symlink with a real copy of what it points to.
+# Replace a symlink with a real copy of what it points to.
 unlink_copy() {
-  local link="$1" tmp
-  [ -L "$link" ] || return 0
-  tmp="$link.tmp$$"
-  cp -aL "$link" "$tmp" && rm "$link" && mv "$tmp" "$link"
+  [ -L "$1" ] || return 0
+  tmp="$1.tmp$$"
+  cp -aL "$1" "$tmp" && rm "$1" && mv "$tmp" "$1"
 }
 
-share_account() {
-  local dir="$1" item
+sessions_on() {
   mkdir -p "$SHARED/projects"
   [ -d "$HOME/.claude/projects" ] && cp -an "$HOME/.claude/projects"/. "$SHARED/projects"/ 2>/dev/null
-  link "$SHARED/projects" "$dir/projects"
-  for item in "${CONFIG_ITEMS[@]}"; do
+  link "$SHARED/projects" "$1/projects"
+}
+sessions_off() { unlink_copy "$1/projects"; }
+
+config_on() {
+  for item in $CONFIG_ITEMS; do
     [ -e "$HOME/.claude/$item" ] || continue
-    # Keep an account's own config; only link what it doesn't have.
-    { [ -e "$dir/$item" ] && [ ! -L "$dir/$item" ]; } && continue
-    link "$HOME/.claude/$item" "$dir/$item"
+    # Keep an account's own file; only link what it doesn't have.
+    if [ -e "$1/$item" ] && [ ! -L "$1/$item" ]; then continue; fi
+    link "$HOME/.claude/$item" "$1/$item"
+  done
+}
+config_off() {
+  for item in $CONFIG_ITEMS; do
+    case "$(readlink "$1/$item" 2>/dev/null)" in "$HOME/.claude/"*) unlink_copy "$1/$item" ;; esac
   done
 }
 
-unshare_account() {
-  local dir="$1" item
-  unlink_copy "$dir/projects"
-  for item in "${CONFIG_ITEMS[@]}"; do
-    case "$(readlink "$dir/$item" 2>/dev/null)" in "$HOME/.claude/"*) unlink_copy "$dir/$item" ;; esac
+sessions_linked() { [ -L "$1/projects" ]; }
+config_linked() {
+  for item in $CONFIG_ITEMS; do
+    case "$(readlink "$1/$item" 2>/dev/null)" in "$HOME/.claude/"*) return 0 ;; esac
   done
-}
-
-confirm() {
-  local ans=""
-  [ -t 0 ] && read -r -p "$1 [y/N] " ans
-  [[ "$ans" =~ ^[Yy] ]]
+  return 1
 }
 
 cmd_add() {
   [ $# -eq 1 ] || die "usage: $0 add NAME"
-  local name="$1" cmd dir
-  check_name "$name"
+  name="$1"; check_name "$name"
   cmd="$BIN/claude-$name"; dir="$(adir "$name")"
-  if [ -e "$cmd" ] && ! sed -n 2p "$cmd" | grep -qx "$MARK"; then
+  if [ -e "$cmd" ] && [ "$(sed -n 2p "$cmd")" != "$MARK" ]; then
     die "$cmd already exists and was not created by this script"
   fi
 
@@ -106,59 +116,68 @@ cmd_add() {
   printf '#!/bin/sh\n%s\nCLAUDE_CONFIG_DIR="%s" exec claude "$@"\n' "$MARK" "$dir" > "$cmd"
   chmod +x "$cmd"
 
-  # Ask about sharing once; after that the saved answer applies to new accounts.
-  if [ ! -f "$FLAG" ]; then
-    echo "Share conversations and settings between your accounts?"
-    echo "  Lets you continue a conversation on another account. The whole"
-    echo "  conversation is then sent to that account."
-    mkdir -p "$SHARED"
-    if confirm "Share?"; then echo on > "$FLAG"; else echo off > "$FLAG"; fi
+  # Ask once per kind of sharing; the answer then applies to every new account.
+  if [ -z "$(default_of sessions)" ]; then
+    echo "Share conversations between accounts?"
+    echo "  Lets you continue a conversation on another account (claude-$name -c)."
+    echo "  The whole conversation is then sent to that account."
+    if ask "Share conversations?"; then set_default sessions on; else set_default sessions off; fi
   fi
-  sharing && share_account "$dir"
+  if [ -z "$(default_of config)" ]; then
+    echo "Share settings from ~/.claude with accounts?"
+    echo "  Theme, skills, plugins, commands, CLAUDE.md, settings.json."
+    echo "  Say no if accounts should have different ones."
+    if ask "Share settings?"; then set_default config on; else set_default config off; fi
+  fi
+  [ "$(default_of sessions)" = on ] && sessions_on "$dir"
+  [ "$(default_of config)" = on ] && config_on "$dir"
 
   echo "Added: claude-$name"
   case ":$PATH:" in *":$BIN:"*) ;; *) echo "Note: $BIN is not in your PATH; add it to use the command." ;; esac
-  echo "Next: run claude-$name and /login."
+  echo "Next: cd into your project, run claude-$name, then /login."
 }
 
 cmd_rm() {
   [ $# -eq 1 ] || die "usage: $0 rm NAME"
-  local name="$1" dir
-  check_name "$name"
-  dir="$(adir "$name")"
-  names | grep -qx "$name" || die "no account '$name'"
+  name="$1"; check_name "$name"; has_account "$name" || die "no account '$name'"
   rm -f "$BIN/claude-$name"
   echo "Removed: claude-$name"
-  if [ -d "$dir" ] && confirm "Also delete $dir (login and settings)? Shared sessions stay."; then
-    rm -rf "$dir"
+  if [ -d "$(adir "$name")" ] && ask "Also delete $(adir "$name") (login and settings)? Shared conversations stay."; then
+    rm -rf "$(adir "$name")"
   fi
 }
 
+# share sessions|config on|off [NAME ...]
 cmd_share() {
-  local mode="${1:-}" n
-  case "$mode" in
-    on)
-      mkdir -p "$SHARED"; echo on > "$FLAG"
-      for n in $(names); do share_account "$(adir "$n")"; done ;;
-    off)
-      [ -d "$SHARED" ] && echo off > "$FLAG"
-      for n in $(names); do unshare_account "$(adir "$n")"; done ;;
-    *) die "usage: $0 share on|off" ;;
-  esac
-  echo "Sharing: $mode"
+  kind="${1:-}"; mode="${2:-}"
+  case "$kind" in sessions|config) ;; *) die "usage: $0 share sessions|config on|off [NAME ...]" ;; esac
+  case "$mode" in on|off) ;; *) die "usage: $0 share $kind on|off [NAME ...]" ;; esac
+  shift 2
+  if [ $# -gt 0 ]; then
+    for n in "$@"; do has_account "$n" || die "no account '$n'"; done
+    targets="$*"
+  else
+    targets="$(names)"
+    set_default "$kind" "$mode"
+  fi
+  for n in $targets; do "${kind}_$mode" "$(adir "$n")"; done
+  echo "Sharing $kind: $mode${*:+ for $*}"
 }
 
 cmd_list() {
-  local n found=0 login
+  found=0
   for n in $(names); do
     found=1
-    login="not logged in"; [ -f "$(adir "$n")/.claude.json" ] && login="logged in"
-    printf 'claude-%-12s %s\n' "$n" "$login"
+    dir="$(adir "$n")"
+    login="not logged in"; [ -f "$dir/.claude.json" ] && login="logged in"
+    s="own conversations"; sessions_linked "$dir" && s="shared conversations"
+    c="own settings"; config_linked "$dir" && c="shared settings"
+    printf 'claude-%-12s %-14s %-22s %s\n' "$n" "$login" "$s" "$c"
   done
   if [ $found = 0 ]; then
     echo "No accounts yet. Add one: $0 add work"
   else
-    echo "Sharing: $(cat "$FLAG" 2>/dev/null || echo off)    Add: $0 add NAME"
+    echo "Add: $0 add NAME    Remove: $0 rm NAME    Sharing: $0 share sessions|config on|off"
   fi
 }
 
@@ -167,6 +186,6 @@ case "${1:-}" in
   rm|remove) shift; cmd_rm "$@" ;;
   share) shift; cmd_share "$@" ;;
   ""|ls|list) cmd_list ;;
-  -h|--help|help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//' ;;
+  -h|--help|help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) die "unknown command '$1' (try: add, rm, share, or no argument)" ;;
 esac

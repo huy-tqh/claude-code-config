@@ -49,16 +49,77 @@ If the width is detected wrong, set it yourself in `settings.json`:
 
 ## Multiple accounts
 
+Use several Claude Code accounts (for example work and personal) on one machine, each with its own login. `claude-accounts.sh` is plain `sh`: run it with `sh claude-accounts.sh ...` or `./claude-accounts.sh ...`.
+
+### 1. Add accounts
+
 ```bash
-bash claude-accounts.sh add work
-bash claude-accounts.sh add personal
+./claude-accounts.sh add work
+./claude-accounts.sh add personal
 ```
 
-Each `add` creates a command (`claude-work`, `claude-personal`) in `~/.local/bin`. Run it and `/login`. Add as many accounts as you like. `bash claude-accounts.sh` lists them, `rm NAME` removes one.
+Each `add` creates a command named `claude-<name>` in `~/.local/bin` and a config dir `~/.claude-<name>`. Add as many as you like. If `~/.local/bin` isn't in your `PATH`, the script says so.
 
-The first `add` asks once whether to share conversations and settings between accounts (default no). If you say yes, you can pick up a conversation on another account when one runs out of quota: in the same folder, run `claude-personal -c`. Change your mind with `bash claude-accounts.sh share on|off`.
+The first `add` asks two questions (sharing is described below). Answer `n` to both if you want fully separate accounts. Your answers become the default for accounts you add later.
 
-Sharing links each account's `projects/` to `~/.claude-shared/projects`, and links `settings.json`, `CLAUDE.md`, `commands`, `skills`, `agents`, `plugins`, `themes` and `statusline-command.sh` from `~/.claude`. `.claude.json` (the login) is never shared. Caveats: resuming sends the whole conversation to the other account; don't run the same session in two terminals; resume from the same folder; symlinks need Linux, macOS, WSL or Termux.
+### 2. Log in, once per account
+
+```bash
+claude-work        # then type /login and sign in with the work account
+claude-personal    # then type /login and sign in with the personal account
+```
+
+### 3. Use them
+
+Use `claude-work` or `claude-personal` anywhere you would use `claude`. Same flags, same behavior; the only difference is which account it uses.
+
+```bash
+cd ~/my-project
+claude-work              # work on this project with the work account
+```
+
+When the work account runs out of quota and you shared conversations, continue the same conversation on another account. Run it in the same folder:
+
+```bash
+claude-personal -c            # continue the latest conversation in this folder
+claude-personal --resume      # or pick one from a list
+```
+
+### Other commands
+
+```bash
+./claude-accounts.sh             # list accounts: login state and what each one shares
+./claude-accounts.sh rm work     # remove the command (asks before deleting the config dir)
+```
+
+### What can be shared
+
+Two independent switches. Both are off unless you said yes.
+
+| Switch | What it shares | Why you might want it |
+|--------|----------------|-----------------------|
+| `sessions` | Conversation history. Every account's `projects/` points to `~/.claude-shared/projects`. | Continue a conversation on another account with `-c`. |
+| `config` | `settings.json`, `CLAUDE.md`, `commands`, `skills`, `agents`, `plugins`, `themes` and `statusline-command.sh`, linked from `~/.claude`. | Same theme, skills and plugins everywhere. Leave it off (or turn it off for one account) when accounts need different ones. |
+
+`.claude.json` holds the login and is never shared.
+
+Change it at any time, for all accounts or only the ones you name:
+
+```bash
+./claude-accounts.sh share sessions on               # all accounts
+./claude-accounts.sh share config off work           # work gets its own settings back
+./claude-accounts.sh share config on personal work   # two accounts
+```
+
+Turning a switch off gives the account a real copy of what it shared, so nothing is lost. Turning `config` on keeps any file an account already has of its own and only links what is missing. Old directories that get replaced are kept as `<name>.bak-<timestamp>`.
+
+### Things to know
+
+- Continuing a conversation on another account sends the whole conversation to that account. Don't share conversations between a work account and a personal one if the code or data is restricted.
+- Conversations are stored per folder, so continue from the same folder.
+- Don't run the same conversation in two terminals at once.
+- The first message after switching accounts may use more quota, because the prompt cache has to be rebuilt.
+- Sharing uses symlinks, so it needs Linux, macOS, WSL or Termux. On Windows Git Bash, enable Developer Mode and set `MSYS=winsymlinks:nativestrict`; otherwise the script stops and leaves the folders as they were.
 
 ## Notes
 
