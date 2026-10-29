@@ -51,12 +51,12 @@ If the width is detected wrong, set it yourself in `settings.json`:
 
 Use several Claude Code accounts (for example work and personal) on one machine, each with its own login. `claude-accounts.sh` is plain `sh`: run it with `sh claude-accounts.sh ...` or `./claude-accounts.sh ...`.
 
-Five commands, all take at most one name:
+Five commands, each takes at most one name:
 
 | Command | What it does |
 |---------|--------------|
 | `add NAME` | Create the command `claude-NAME`. |
-| `edit NAME` | Change what `NAME` shares with other accounts. |
+| `config NAME` | Choose what `NAME` shares with other accounts, and rename it. |
 | `rm NAME` | Remove `claude-NAME`. |
 | `list` | Accounts, login state, and what each one shares. |
 | `completion bash\|zsh` | Install tab completion. |
@@ -78,23 +78,32 @@ usage: ./claude-accounts.sh add NAME
 
 Each `add` creates a command `claude-<name>` in `~/.local/bin` and a config dir `~/.claude-<name>`. Add as many as you like. If `~/.local/bin` isn't in your `PATH`, the script says so. The name can't be `shared`.
 
-`add` asks two questions about that account. Each needs an explicit `y` or `n`; Enter alone isn't accepted. These commands need a terminal because of the questions.
+`add` doesn't ask anything. The new account shares nothing: it has its own conversations and its own settings, and `add` prints that. To change it, run `config NAME`.
+
+### 2. Configure sharing and name (optional)
+
+```bash
+./claude-accounts.sh config work
+```
+
+`config` shows the current state, then asks three questions. Each needs an explicit `y` or `n`; Enter alone isn't accepted. It needs a terminal because of the questions.
 
 | Question | `y` means | Why you might want it |
 |----------|-----------|-----------------------|
 | Share conversations? | The account's `projects/` points to `~/.claude-shared/projects`, so it sees the same conversation history as every other account that answered `y`. | Continue a conversation on another account with `-c`. |
 | Share settings? | `settings.json`, `CLAUDE.md`, `commands`, `skills`, `agents`, `plugins`, `themes` and `statusline-command.sh` are linked from `~/.claude`. | Same theme, skills and plugins everywhere. Answer `n` for an account that needs different ones. |
+| Rename? | `y` asks for a new name. The command and the config dir are renamed together. | Fix a typo or change your mind. |
 
-`.claude.json` holds the login and is never shared. To change an answer later, run `edit NAME`; it asks the same two questions. `n` gives the account a real copy of what it shared, so nothing is lost. `y` on settings keeps any file the account already has of its own and only links what is missing. Old directories that get replaced are kept as `<name>.bak-<timestamp>`.
+`.claude.json` holds the login and is never shared. Run `config` again any time to change an answer. `n` gives the account a real copy of what it shared, so nothing is lost. `y` on settings keeps any file the account already has of its own and only links what is missing. Old directories that get replaced are kept as `<name>.bak-<timestamp>`.
 
-### 2. Log in, once per account
+### 3. Log in, once per account
 
 ```bash
 claude-work        # then type /login and sign in with the work account
 claude-personal    # then type /login and sign in with the personal account
 ```
 
-### 3. Use them
+### 4. Use them
 
 Use `claude-work` or `claude-personal` anywhere you would use `claude`. Same flags, same behavior; the only difference is which account it uses.
 

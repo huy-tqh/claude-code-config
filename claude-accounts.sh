@@ -18,7 +18,7 @@ CONFIG_ITEMS="settings.json CLAUDE.md commands skills agents plugins themes stat
 tmpl() {
   case "$1" in
     add)        echo "$0 add NAME" ;;
-    edit)       echo "$0 edit NAME" ;;
+    config)     echo "$0 config NAME" ;;
     rm)         echo "$0 rm NAME" ;;
     list)       echo "$0 list" ;;
     completion) echo "$0 completion bash|zsh" ;;
@@ -30,8 +30,8 @@ usage() {
 Commands:
   $(tmpl add)
       create the command claude-NAME
-  $(tmpl edit)
-      change what NAME shares with other accounts
+  $(tmpl config)
+      share conversations or settings with other accounts, or rename NAME
   $(tmpl rm)
       remove claude-NAME
   $(tmpl list)
@@ -134,39 +134,75 @@ config_linked() {
   return 1
 }
 
-# Ask both sharing questions for the account in $1 and apply the answers.
-ask_sharing() {
-  if yn "Share conversations with other accounts? (continue a chat on another account; the chat is then sent to it)"
-  then sessions_on "$1"; else sessions_off "$1"; fi
-  if yn "Share settings from ~/.claude? (theme, skills, plugins, CLAUDE.md; n = this account keeps its own)"
-  then config_on "$1"; else config_off "$1"; fi
+# status_line NAME: one line with login state and what the account shares.
+status_line() {
+  dir="$(adir "$1")"
+  login="not logged in"; [ -f "$dir/.claude.json" ] && login="logged in"
+  sc="own conversations"; sessions_linked "$dir" && sc="shared conversations"
+  st="own settings"; config_linked "$dir" && st="shared settings"
+  printf 'claude-%-12s %-14s %-22s %s\n' "$1" "$login" "$sc" "$st"
+}
+
+# Ask for a new name until it is valid and free. Sets $newname.
+ask_new_name() {
+  while :; do
+    printf 'New name: '
+    read -r newname || { echo; die "no answer given"; }
+    case "$newname" in
+      "") echo "Type a name." ;;
+      *[!a-z0-9_-]*|[!a-z0-9]*|shared) echo "Use lowercase letters, digits, - or _ (not 'shared')." ;;
+      *) if [ -e "$BIN/claude-$newname" ] || [ -e "$(adir "$newname")" ]
+         then echo "'$newname' is taken."; else return 0; fi ;;
+    esac
+  done
+}
+
+rename_account() { # rename_account OLD NEW
+  mv "$(adir "$1")" "$(adir "$2")" || die "could not move $(adir "$1")"
+  printf '#!/bin/sh\n%s\nCLAUDE_CONFIG_DIR="%s" exec claude "$@"\n' "$MARK" "$(adir "$2")" > "$BIN/claude-$2"
+  chmod +x "$BIN/claude-$2"
+  rm -f "$BIN/claude-$1"
 }
 
 cmd_add() {
   [ $# -eq 1 ] || fail add "expected exactly one NAME, got $#"
-  name="$1"; check_name add "$name"; need_terminal add
+  name="$1"; check_name add "$name"
   cmd="$BIN/claude-$name"; dir="$(adir "$name")"
   if [ -e "$cmd" ] && [ "$(sed -n 2p "$cmd")" != "$MARK" ]; then
     die "$cmd already exists and was not created by this script"
   fi
-  [ -e "$cmd" ] && die "claude-$name already exists (change it with: $(tmpl edit | sed "s/NAME/$name/"))"
+  [ -e "$cmd" ] && die "claude-$name already exists (change it with: $(tmpl config | sed "s/NAME/$name/"))"
 
   mkdir -p "$BIN" "$dir"
   printf '#!/bin/sh\n%s\nCLAUDE_CONFIG_DIR="%s" exec claude "$@"\n' "$MARK" "$dir" > "$cmd"
   chmod +x "$cmd"
-  ask_sharing "$dir"
 
   echo "Added: claude-$name"
+  status_line "$name"
   case ":$PATH:" in *":$BIN:"*) ;; *) echo "Note: $BIN is not in your PATH; add it to use the command." ;; esac
   echo "Next: cd into your project, run claude-$name, then /login."
+  echo "To share conversations or settings, or rename: $(tmpl config | sed "s/NAME/$name/")"
 }
 
-cmd_edit() {
-  [ $# -eq 1 ] || fail edit "expected exactly one NAME, got $#"
-  check_name edit "$1"; need_terminal edit
-  has_account "$1" || fail edit "no account '$1' (see: $(tmpl list))"
-  ask_sharing "$(adir "$1")"
-  echo "Updated: claude-$1"
+cmd_config() {
+  [ $# -eq 1 ] || fail config "expected exactly one NAME, got $#"
+  check_name config "$1"; need_terminal config
+  has_account "$1" || fail config "no account '$1' (see: $(tmpl list))"
+  dir="$(adir "$1")"
+  echo "Now: $(status_line "$1")"
+  sessions_linked "$dir" && now="now: shared" || now="now: own"
+  if yn "Share conversations with other accounts? ($now; lets you continue a chat on another account, which then receives it)"
+  then sessions_on "$dir"; else sessions_off "$dir"; fi
+  config_linked "$dir" && now="now: shared" || now="now: own"
+  if yn "Share settings from ~/.claude? ($now; theme, skills, plugins, CLAUDE.md; n = this account keeps its own)"
+  then config_on "$dir"; else config_off "$dir"; fi
+  if yn "Rename claude-$1?"; then
+    ask_new_name
+    rename_account "$1" "$newname"
+    echo "Renamed: claude-$1 -> claude-$newname"
+    set -- "$newname"
+  fi
+  status_line "$1"
 }
 
 cmd_rm() {
@@ -184,14 +220,7 @@ cmd_rm() {
 cmd_list() {
   [ $# -eq 0 ] || fail list "takes no arguments, got $#"
   found=0
-  for n in $(names); do
-    found=1
-    dir="$(adir "$n")"
-    login="not logged in"; [ -f "$dir/.claude.json" ] && login="logged in"
-    s="own conversations"; sessions_linked "$dir" && s="shared conversations"
-    c="own settings"; config_linked "$dir" && c="shared settings"
-    printf 'claude-%-12s %-14s %-22s %s\n' "$n" "$login" "$s" "$c"
-  done
+  for n in $(names); do found=1; status_line "$n"; done
   [ $found = 1 ] || echo "No accounts yet. Add one: $(tmpl add)"
 }
 
@@ -202,11 +231,11 @@ print_bash_comp() {
 _claude_accounts() {
   local cur=${COMP_WORDS[COMP_CWORD]} w="" a d n
   if [[ $COMP_CWORD == 1 ]]; then
-    w="add edit rm list completion"
+    w="add config rm list completion"
   elif [[ $COMP_CWORD == 2 ]]; then
     case ${COMP_WORDS[1]} in
       completion) w="bash zsh" ;;
-      edit|rm)
+      config|rm)
         for d in "$HOME"/.claude-*/; do
           n=${d%/}; n=${n##*/.claude-}
           [[ $n != shared && $n != "*" ]] && w="$w $n"
@@ -227,10 +256,10 @@ _claude_accounts() {
   local -a acc
   local d n
   case $CURRENT in
-    2) compadd add edit rm list completion ;;
+    2) compadd add config rm list completion ;;
     3) case $words[2] in
          completion) compadd bash zsh ;;
-         edit|rm)
+         config|rm)
            for d in ~/.claude-*(N/); do
              n=${d:t}; n=${n#.claude-}
              [[ $n == shared ]] || acc+=($n)
@@ -264,7 +293,7 @@ cmd_completion() {
 cmd="$1"; shift
 case "$cmd" in
   add) cmd_add "$@" ;;
-  edit) cmd_edit "$@" ;;
+  config) cmd_config "$@" ;;
   rm) cmd_rm "$@" ;;
   list) cmd_list "$@" ;;
   completion) cmd_completion "$@" ;;
